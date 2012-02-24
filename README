@@ -1,0 +1,58 @@
+
+The modules has still a few problems:
+
+* it required /system/etc/init.gprs-pppd for pppd.
+	#!/system/bin/sh
+	PPPD_PID=
+
+	/system/bin/setprop "net.gprs.ppp-exit" ""
+
+	/system/bin/log -t pppd "Starting pppd"
+
+	#/system/xbin/pppd $*
+	/system/bin/pppd /dev/ttyUSB0 115200 nocrtscts usepeerdns debug nodetach ipcp-accept-local ipcp-accept-remote defaultroute
+
+	PPPD_EXIT=$?
+	PPPD_PID=$!
+
+	/system/bin/log -t pppd "pppd exited with $PPPD_EXIT"
+
+	/system/bin/setprop "net.gprs.ppp-exit" "$PPPD_EXIT"
+
+
+* required modify init.rc add: 
+	on device-added-/dev/ttyUSB0
+	chmod 0777 /dev/ttyUSB0
+	on device-added-/dev/ttyUSB1
+	chmod 0777 /dev/ttyUSB1
+	on device-added-/dev/ttyUSB2
+	chmod 0777 /dev/ttyUSB2
+	on device-added-/dev/ttyUSB3
+	chmod 0777 /dev/ttyUSB3
+
+	on device-added-/dev/block/sr0
+	start usb_modeswitch
+
+	on boot
+	service ril-daemon /system/bin/rild
+	socket rild stream 660 root radio
+	socket rild-debug stream 660 radio system
+	user root
+	group radio cache inet misc audio
+	
+	service pppd_gprs /system/etc/init.gprs-pppd
+	user root
+	group radio cache inet misc
+	disabled
+	oneshot
+	
+	service usb_modeswitch /system/bin/usbs
+	user root
+	disabled
+	oneshot
+
+* Edit system/build.prop ,add:
+	# for 3g
+	rild.libpath=/system/lib/libhuaweigeneric-ril.so
+	rild.libargs=-d /dev/ttyUSB2
+	keyguard.no_require_sim=1
