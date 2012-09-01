@@ -1,35 +1,37 @@
-# Copyright 2006 The Android Open Source Project
+# Copyright 2012 The Android-x86 Open Source Project
 
-# XXX using libutils for simulator build only...
-#
-LOCAL_PATH:= $(call my-dir)
+LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
-LOCAL_SRC_FILES:= \
-    huaweigeneric-ril.c \
-    atchannel.c \
-    misc.c \
+LOCAL_SRC_FILES := \
     at_tok.c \
+    atchannel.c \
+    audiochannel.cpp \
+	audioqueue.c \
+    fcp_parser.c \
+    gsm.c \
+    huaweigeneric-ril.c \
+    misc.c \
+	net-utils.c \
+    requestdatahandler.c \
     sms.c \
     sms_gsm.c \
-    gsm.c \
-	requestdatahandler.c
 
 LOCAL_SHARED_LIBRARIES := \
-	libcutils libutils libril
+    libcutils \
+    libutils \
+    libril \
+    libmedia
 
 # for asprinf
 LOCAL_CFLAGS := -D_GNU_SOURCE
+#build shared library
+LOCAL_CFLAGS += -DRIL_SHLIB
 
-LOCAL_C_INCLUDES := $(KERNEL_HEADERS) $(TOP)/hardware/ril/libril/
+LOCAL_C_INCLUDES := \
+    hardware/ril/libril \
 
+LOCAL_MODULE:= libhuaweigeneric-ril
 LOCAL_MODULE_TAGS := optional
 
-#build shared library
-LOCAL_SHARED_LIBRARIES += \
-libcutils libutils
-LOCAL_LDLIBS += -lpthread
-LOCAL_CFLAGS += -DRIL_SHLIB 
-LOCAL_MODULE:= libhuaweigeneric-ril
-LOCAL_PRELINK_MODULE := false
 include $(BUILD_SHARED_LIBRARY)

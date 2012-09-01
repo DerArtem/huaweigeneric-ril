@@ -1,26 +1,7 @@
 
 The modules has still a few problems:
 
-* it required /system/etc/init.gprs-pppd for pppd.
-	#!/system/bin/sh
-	PPPD_PID=
-
-	/system/bin/setprop "net.gprs.ppp-exit" ""
-
-	/system/bin/log -t pppd "Starting pppd"
-
-	#/system/xbin/pppd $*
-	/system/bin/pppd /dev/ttyUSB0 115200 nocrtscts usepeerdns debug nodetach ipcp-accept-local ipcp-accept-remote defaultroute
-
-	PPPD_EXIT=$?
-	PPPD_PID=$!
-
-	/system/bin/log -t pppd "pppd exited with $PPPD_EXIT"
-
-	/system/bin/setprop "net.gprs.ppp-exit" "$PPPD_EXIT"
-
-
-* required modify init.rc add: 
+* required modify init.rc add:
 	on device-added-/dev/ttyUSB0
 	chmod 0777 /dev/ttyUSB0
 	on device-added-/dev/ttyUSB1
@@ -29,9 +10,11 @@ The modules has still a few problems:
 	chmod 0777 /dev/ttyUSB2
 	on device-added-/dev/ttyUSB3
 	chmod 0777 /dev/ttyUSB3
+	on device-added-/dev/ttyUSB4
+	chmod 0777 /dev/ttyUSB4
+	on device-added-/dev/ttyUSB5
+	chmod 0777 /dev/ttyUSB5
 
-	on device-added-/dev/block/sr0
-	start usb_modeswitch
 
 	on boot
 	service ril-daemon /system/bin/rild
@@ -39,20 +22,65 @@ The modules has still a few problems:
 	socket rild-debug stream 660 radio system
 	user root
 	group radio cache inet misc audio
-	
-	service pppd_gprs /system/etc/init.gprs-pppd
-	user root
-	group radio cache inet misc
-	disabled
-	oneshot
-	
-	service usb_modeswitch /system/bin/usbs
-	user root
-	disabled
-	oneshot
+
 
 * Edit system/build.prop ,add:
 	# for 3g
 	rild.libpath=/system/lib/libhuaweigeneric-ril.so
-	rild.libargs=-d /dev/ttyUSB2
+	rild.libargs=-d /dev/ttyUSB2 -v /dev/ttyUSB1
 	keyguard.no_require_sim=1
+
+
+----
+
+	pppd must be suid ROOT, and kernel must include ppp support compiled in
+	/system/etc/ppp/ip-up and also /system/etc/ppp/ip-down must also be suid ROOT
+	
+----
+
+	You also need the following files in /system/etc/ppp
+
+----	
+/system/etc/ppp/ip-up:
+
+#!/system/bin/sh
+case $1 in
+    ppp1)
+	/android/bin/iptables --flush;
+	/android/bin/iptables --table nat --flush;
+	/android/bin/iptables --delete-chain;
+	/android/bin/iptables --table nat --append POSTROUTING --out-interface ppp0 -j MASQUERADE;
+	/android/bin/iptables --append FORWARD --in-interface ppp1 -j ACCEPT;
+	echo 0 > /proc/sys/net/ipv4/ip_forward;
+	echo 1 > /proc/sys/net/ipv4/ip_forward;
+	;;
+    ppp0)
+    /system/bin/setprop "net.interfaces.defaultroute" "$LINKNAME";
+    ;;
+esac
+
+/system/bin/setprop "net.$LINKNAME.dns1" "$DNS1"
+/system/bin/setprop "net.$LINKNAME.dns2" "$DNS2" 
+/system/bin/setprop "net.$LINKNAME.local-ip" "$IPLOCAL" 
+/system/bin/setprop "net.$LINKNAME.remote-ip" "$IPREMOTE" 
+/system/bin/setprop "net.$LINKNAME.gw" "$IPREMOTE"
+/system/bin/setprop "net.$LINKNAME.if" "$IFNAME"
+
+
+----
+/system/etc/ppp/ip-down:
+
+#!/system/bin/sh
+case $1 in
+    ppp1)
+	echo 0 > /proc/sys/net/ipv4/ip_forward;
+	;;
+esac
+
+/system/bin/setprop "net.$LINKNAME.dns1" ""
+/system/bin/setprop "net.$LINKNAME.dns2" "" 
+/system/bin/setprop "net.$LINKNAME.local-ip" "" 
+/system/bin/setprop "net.$LINKNAME.remote-ip" "" 
+/system/bin/setprop "net.$LINKNAME.gw" ""
+/system/bin/setprop "net.$LINKNAME.if" ""
+ 

@@ -19,10 +19,6 @@
 #define ATCHANNEL_H 1
 #include "at_error.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* Define AT_DEBUG to send AT traffic to "/tmp/radio-at.log" */
 #define AT_DEBUG  0
 
@@ -86,7 +82,7 @@ void at_close(void);
  */
 void at_set_timeout_msec(int timeout);
 
-/* 
+/*
  * This callback is invoked on the command thread.
  * You should reset or handshake here to avoid getting out of sync.
  */
@@ -140,10 +136,6 @@ AT_CME_Error at_get_cme_error(int error);
 AT_CMS_Error at_get_cms_error(int error);
 AT_Generic_Error at_get_generic_error(int error);
 AT_Error_type at_get_error_type(int error);
-char *at_str_err(int error);
-
-#ifdef __cplusplus
-}
-#endif
+const char *at_str_err(int error);
 
 #endif

@@ -23,8 +23,7 @@ sms_utf8_from_message_str( const char*  str, int  strlen, unsigned char*  utf8, 
     int             count   = 0;
     int             escaped = 0;
 
-    while (p < end)
-    {
+    while (p < end) {
         int  c = p[0];
 
         /* read the value from the string */
@@ -70,9 +69,7 @@ sms_utf8_from_message_str( const char*  str, int  strlen, unsigned char*  utf8, 
                     return -1;
             }
             escaped = 0;
-        }
-        else if (c == '\\')
-        {
+        } else if (c == '\\') {
             escaped = 1;
             continue;
         }
@@ -82,15 +79,13 @@ sms_utf8_from_message_str( const char*  str, int  strlen, unsigned char*  utf8, 
             if (count < utf8len)
                 utf8[count] = (byte_t) c;
             count += 1;
-        }
-        else if (c < 0x800) {
+        } else if (c < 0x800) {
             if (count < utf8len)
                 utf8[count]   = (byte_t)(0xc0 | ((c >> 6) & 0x1f));
             if (count+1 < utf8len)
                 utf8[count+1] = (byte_t)(0x80 | (c & 0x3f));
             count += 2;
-        }
-        else {
+        } else {
             if (count < utf8len)
                 utf8[count]   = (byte_t)(0xc0 | ((c >> 12) & 0xf));
             if (count+1 < utf8len)
@@ -170,21 +165,21 @@ gsm_rope_add_timestamp( GsmRope  rope, const SmsTimeStampRec*  ts )
 int
 sms_address_to_str( SmsAddress  address, char*  str, int  strlen )
 {
-	bytes_t      data = address->data;
-	if(address->toa == 0x91)
-		*str++='+';
-	int i;
-	char c;
-	for(i=0;i<address->len;i++) {
-		c=data[i/2];
-		if(i&1) c=c>>4;
-		*str++='0'+(c&15);
-	}
-	*str=0;
-	return 1;
+    bytes_t      data = address->data;
+    if(address->toa == 0x91)
+        *str++='+';
+    int i;
+    char c;
+    for (i=0;i<address->len;i++) {
+        c=data[i/2];
+        if(i&1) c=c>>4;
+        *str++='0'+(c&15);
+    }
+    *str=0;
+    return 1;
 }
-		
-	
+
+
 int
 sms_address_from_str( SmsAddress  address, const char*  src, int  srclen )
 {
@@ -198,7 +193,7 @@ sms_address_from_str( SmsAddress  address, const char*  src, int  srclen )
     if (src >= end)
         return -1;
 
-    if ( src[0] == '+' ) {
+    if (src[0] == '+') {
         address->toa = 0x91;
         if (++src == end)
             goto Fail;
@@ -236,7 +231,7 @@ Fail:
 int
 sms_address_from_bytes( SmsAddress  address, const unsigned char*  buf, int  buflen )
 {
-    int   len = sizeof(address->data), num_digits;
+    unsigned int len = sizeof(address->data), num_digits;
 
     if (buflen < 2)
         return -1;
@@ -362,8 +357,8 @@ sms_get_sc_address( cbytes_t   *pcur,
     int       result = -1;
 
     if (cur < end) {
-        int  len = cur[0];
-        int  dlen, adjust = 0;
+        unsigned int  len = cur[0];
+        unsigned int  dlen, adjust = 0;
 
         cur += 1;
 
@@ -382,8 +377,7 @@ sms_get_sc_address( cbytes_t   *pcur,
         len         -= 1;
         result       = 0;
 
-        for (dlen = 0; dlen < len; dlen+=1)
-        {
+        for (dlen = 0; dlen < len; dlen+=1) {
             int  c = cur[dlen];
             int  v;
 
@@ -444,7 +438,7 @@ sms_get_address( cbytes_t   *pcur,
 {
     cbytes_t  cur    = *pcur;
     int       result = -1;
-    int       len, dlen;
+    unsigned int len, dlen;
 
     if (cur >= end)
         goto Exit;
@@ -712,22 +706,19 @@ sms_get_text_utf8( cbytes_t        *pcur,
     }
 
     /* switch the user data header if any */
-    if (coding == SMS_CODING_SCHEME_GSM7)
-    {
+    if (coding == SMS_CODING_SCHEME_GSM7) {
         int  count = utf8_from_gsm7( cur, 0, len, NULL );
 
         if (rope != NULL)
         {
             bytes_t  dst = gsm_rope_reserve( rope, count );
-	    if(hasUDH && dst)
-		*dst++=(*cur++)>>1;
+        if(hasUDH && dst)
+        *dst++=(*cur++)>>1;
             if (dst != NULL)
                 utf8_from_gsm7( cur, 0, len, dst );
         }
         cur += (len+1)/2;
-    }
-    else if (coding == SMS_CODING_SCHEME_UCS2)
-    {
+    } else if (coding == SMS_CODING_SCHEME_UCS2) {
         int  count = ucs2_to_utf8( cur, len/2, NULL );
 
         if (rope != NULL)
@@ -881,8 +872,7 @@ gsm_rope_add_sms_deliver_pdu( GsmRope                 rope,
 
         //assert( count <= MAX_USER_DATA_SEPTETS - USER_DATA_HEADER_SIZE );
 
-        if (pdu_count > 1)
-        {
+        if (pdu_count > 1) {
             int  headerBits    = 6*8;  /* 6 is size of header in bytes */
             int  headerSeptets = headerBits / 7;
             if (headerBits % 7 > 0)
@@ -892,9 +882,9 @@ gsm_rope_add_sms_deliver_pdu( GsmRope                 rope,
 
             gsm_rope_add_c( rope, count + headerSeptets );
             gsm_rope_add_sms_user_header(rope, ref_num, pdu_count, pdu_index);
-        }
-        else
+        } else {
             gsm_rope_add_c( rope, count );
+        }
 
         count = (count*7+pad+7)/8;  /* convert to byte count */
 
@@ -908,13 +898,12 @@ gsm_rope_add_sms_deliver_pdu( GsmRope                 rope,
 
         //assert( count*2 <= MAX_USER_DATA_BYTES - USER_DATA_HEADER_SIZE );
 
-        if (pdu_count > 1)
-        {
+        if (pdu_count > 1) {
             gsm_rope_add_c( rope, count*2 + 6 );
             gsm_rope_add_sms_user_header( rope, ref_num, pdu_count, pdu_index );
-        }
-        else
+        } else {
             gsm_rope_add_c( rope, count*2 );
+        }
 
         gsm_rope_add_c( rope, count*2 );
         dst = gsm_rope_reserve( rope, count*2 );
@@ -1032,8 +1021,7 @@ smspdu_create_deliver_utf8( const unsigned char*   utf8,
         cbytes_t   src_end = utf8 + utf8len;
         int        nn;
 
-        for (nn = 0; nn < num_pdus; nn++)
-        {
+        for (nn = 0; nn < num_pdus; nn++) {
             int       skip = block;
             cbytes_t  src_next;
 
@@ -1077,7 +1065,7 @@ smspdu_create_from_hex( const char*  hex, int  hexlen )
         goto Exit;
     }
 
-    gsm_hex_to_bytes( hex, hexlen, p->base );
+    gsm_hex_to_bytes((cbytes_t) hex, hexlen, p->base );
     p->end = p->base + (hexlen+1)/2;
 
     data = p->base;
@@ -1109,4 +1097,3 @@ smspdu_to_hex( SmsPDU  pdu, char*  hex, int  hexlen )
     }
     return result;
 }
-

@@ -171,7 +171,7 @@ gsm_hex_to_bytes( cbytes_t  hex, int  hexlen, bytes_t  dst )
     int  nn;
 
     for (nn = 0; nn < hexlen/2; nn++ ) {
-        dst[nn] = (byte_t) gsm_hex2_to_byte0( hex+2*nn );
+        dst[nn] = (byte_t) gsm_hex2_to_byte0( (char const*) hex+2*nn );
     }
     if (hexlen & 1) {
         dst[nn] = gsm_hexchar_to_int0( hex[2*nn] ) << 4;
@@ -601,8 +601,7 @@ utf8_from_gsm7( cbytes_t  src,
     int  result  = 0;
 
     src += (septet_offset >> 3);
-    for ( ; septet_count > 0; septet_count-- )
-    {
+    for ( ; septet_count > 0; septet_count-- ) {
         int  c = (src[0] >> shift) & 0x7f;
         int  v;
 
@@ -639,8 +638,7 @@ utf8_from_gsm8( cbytes_t  src, int  count, bytes_t  utf8 )
     int  escaped = 0;
 
 
-    for ( ; count > 0; count-- )
-    {
+    for ( ; count > 0; count-- ) {
         int  c = *src++;
         int  v;
 
@@ -655,9 +653,7 @@ utf8_from_gsm8( cbytes_t  src, int  count, bytes_t  utf8 )
                 escaped = 1;
                 continue;
             }
-        }
-        else
-        {
+        } else {
             if (c >= 0x80) {
                 c       = 0x20;
                 escaped = 0;
@@ -690,8 +686,7 @@ ucs2_from_gsm7( bytes_t   ucs2,
     int                   escaped = 0;
     int                   result  = 0;
 
-    for ( ; septet_count > 0; septet_count-- )
-    {
+    for ( ; septet_count > 0; septet_count-- ) {
         unsigned  val  = (p[0] >> shift) & 0x7f;
 
         if (shift > 1)
@@ -702,11 +697,9 @@ ucs2_from_gsm7( bytes_t   ucs2,
 
             result += ucs2_write(ucs2, result, c);
             escaped = 0;
-        }
-        else if (val == GSM_7BITS_ESCAPE) {
+        } else if (val == GSM_7BITS_ESCAPE) {
             escaped = 1;
-        }
-        else {
+        } else {
             val = gsm7bits_extend_to_unicode[val];
             if (val == 0)
                 val = 0x20;
@@ -1031,9 +1024,7 @@ sim_adn_alpha_to_utf8( cbytes_t  alpha, cbytes_t  end, bytes_t  dst )
 
         alpha += 1;
         result = ucs2_to_utf8( alpha, (end-alpha)/2, dst );
-    }
-    else
-    {
+    } else {
         int  is_ucs2 = 0;
         int  len = 0, base = 0;
 
@@ -1069,8 +1060,7 @@ sim_adn_alpha_to_utf8( cbytes_t  alpha, cbytes_t  end, bytes_t  dst )
                     alpha  += count;
                 }
             }
-        }
-        else {
+        } else {
             result = utf8_from_gsm8(alpha, end-alpha, dst);
         }
     }
@@ -1112,7 +1102,7 @@ sim_adn_record_from_bytes( SimAdnRecord  rec, cbytes_t  data, int  len )
     /* alpha is optional */
     if (len > ADN_FOOTER_SIZE) {
         cbytes_t  dataend = data + len - ADN_FOOTER_SIZE;
-        int       count   = sim_adn_alpha_to_utf8(data, dataend, NULL);
+        unsigned int count = sim_adn_alpha_to_utf8(data, dataend, NULL);
 
         if (count > sizeof(rec->adn.alpha)-1)  /* too long */
             return -1;
@@ -1128,7 +1118,7 @@ sim_adn_record_from_bytes( SimAdnRecord  rec, cbytes_t  data, int  len )
     /* decode TON and number to ASCII, NOTE: this is lossy !! */
     {
         int      ton    = footer[ADN_OFFSET_TON_NPI];
-        bytes_t  number = rec->adn.number;
+        bytes_t  number = (bytes_t) rec->adn.number;
         int      len    = sizeof(rec->adn.number)-1;
         int      count;
 
@@ -1153,13 +1143,13 @@ sim_adn_record_to_bytes( SimAdnRecord  rec, bytes_t   data, int  datalen )
     bytes_t   end    = data + datalen;
     bytes_t   footer = end - ADN_FOOTER_SIZE;
     int       ton    = 0x81;
-    cbytes_t  number = rec->adn.number;
+    cbytes_t  number = (cbytes_t) rec->adn.number;
     int       len;
 
     if (number[0] == '+') {
         ton     = 0x91;
         number += 1;
     }
-    footer[0] = (strlen(number)+1)/2 + 1;
-	return 0;
+    footer[0] = (strlen((const char*) number)+1)/2 + 1;
+    return 0;
 }
