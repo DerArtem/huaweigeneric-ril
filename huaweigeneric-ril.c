@@ -154,6 +154,7 @@ static void checkMessageStorageReady(void *p);
 static void onSIMReady(void *p);
 static void pollSIMState(void *param);
 static void checkMessageStorageReady(void *p);
+static int pppSupported(void);
 
 extern const char * requestToString(int request);
 
@@ -1191,7 +1192,8 @@ static int dial_at_modem(const char* cmd, int skipanswerwait)
 static int killConn(const char* cididx)
 {
 	/* Leave NDIS mode */
-    at_send_command("AT^NDISDUP=%s,0",cididx);
+	if (!pppSupported())
+		at_send_command("AT^NDISDUP=%s,0",cididx);
 	
 	/* Leave Data context mode */
     at_send_command("AT+CGACT=0,%s", cididx);
