@@ -102,7 +102,7 @@ typedef struct CommandInfo {
 
 /* RILD made me do it! */
 static CommandInfo s_commandInfo[] = {
-#include <ril_commands.h>
+#include "ril_commands.h"
 };
 
 static void *dummyDispatch(void *data, size_t datalen)
