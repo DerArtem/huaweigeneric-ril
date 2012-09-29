@@ -5536,6 +5536,34 @@ static void requestGetIMSI(RIL_Token t)
 
 
 /**
+ * RIL_REQUEST_GET_IMEI
+ *
+ * Get the device IMEI, which should be 15 decimal digits.
+*/
+static void requestGetIMEI(RIL_Token t)
+{
+    ATResponse *atResponse = NULL;
+    int err;
+
+    /* IMEI */
+    err = at_send_command_numeric("AT+CGSN", &atResponse);
+
+    if (err != AT_NOERROR)
+        goto error;
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, atResponse->p_intermediates->line, sizeof(char *));
+
+    at_response_free(atResponse);
+    return;
+
+error:
+    RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    at_response_free(atResponse);
+}
+
+
+
+/**
  * RIL_REQUEST_GET_IMEISV
  *
  * Get the device IMEISV, which should be two decimal digits.
@@ -7044,7 +7072,7 @@ static void processRequest (int request, void *data, size_t datalen, RIL_Token t
             requestGetIMSI(t);
             break;
         case RIL_REQUEST_GET_IMEI:
-            requestGetIMEISV(t);
+            requestGetIMEI(t);
             break;
         case RIL_REQUEST_GET_IMEISV:
             requestGetIMEISV(t);
