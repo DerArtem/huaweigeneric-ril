@@ -1,4 +1,4 @@
-/* //device/system/htcgeneric-ril/htcgeneric-ril.c
+/*
  **
  ** Copyright 2006, The Android Open Source Project
  ** Copyright 2012 Eduardo Jos[e Tagle <ejtagle@tutopia.com>
@@ -19,27 +19,6 @@
 //#define ORG_DIAL 0
 //#define BYPASS_AUDIO_CHECK 1
 
-/*
-AT^CURC=0
-ATQ0V1
-
-^MODE:
-^RSSI:
-^SRVST:
-+CCCM:
-^CONN:
-^CEND:
-+CDSI:
-^SMMEMFULL:
-+CSSU:
-^DCONN
-^DEND
-^SIMST      ¡
-+CRING:
-AT^SYSCFG=2,3,%s,1,2
-^RSSI
-
-*/
 
 /*
 The status updates from the second port are prefixed with a caret and are of these forms:
@@ -133,6 +112,8 @@ C = is for?
 #include <cutils/sockets.h>
 #include <termios.h>
 #include <cutils/properties.h>
+#include <cutils/logger.h>
+#include <cutils/logd.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -143,7 +124,7 @@ C = is for?
 
 #define D ALOGI
 
-#define RIL_VERSION_STRING "Huawei-ril 1.0.0.0"
+#define RIL_VERSION_STRING "Huawei-ril 1.0.0.8 (Built on " __DATE__" " __TIME__ ")"
 
 #define timespec_cmp(a, b, op)         \
         ((a).tv_sec == (b).tv_sec    \
@@ -250,7 +231,7 @@ static RequestQueue *s_requestQueues[] = {
 };
 
 /* The Audio channel */
-static struct GsmAudioTunnel sAudioChannel = GSM_AUDIO_CHANNEL_STATIC_INIT;
+static struct GsmAudioTunnel sAudioChannel;
 static char  sAudioDevice[64] = {0};
 
 static int audioTunnelMuted = 0; // If audio tunnel is muted
@@ -1237,6 +1218,161 @@ static int killConn(const char* cididx)
     return 0;
 }
 
+#define LOG_FILE_DIR    "/dev/log/"
+
+struct lc_entry {
+    union {
+        unsigned char buf[LOGGER_ENTRY_MAX_LEN + 1] __attribute__((aligned(4)));
+        struct logger_entry entry __attribute__((aligned(4)));
+    };
+};
+
+/* Get the connection data used by pppd from the android logcat */
+int get_pppd_info(struct timeval* from, char* local_ip, char* dns1, char* dns2, char* gw)
+{
+	struct lc_entry* lce;
+
+	const char mainlog[] = LOG_FILE_DIR "main";
+	const char pppd_str[] = "pppd";
+	const char local_ip_str[] = "local  IP address ";
+	const char remote_ip_str[] = "remote IP address ";
+	const char primary_dns_str[] = "primary   DNS address ";
+	const char secondary_dns_str[] = "secondary DNS address ";
+
+	int fd;
+    int result;
+	fd_set readset;
+	int search_tmout = 500; //
+	
+	local_ip[0] = 0;
+	dns1[0] = 0;
+	dns2[0] = 0;
+	gw[0] = 0;
+	
+	lce = malloc(sizeof(struct lc_entry));
+	if (!lce) {
+		ALOGE("Failed to allocate logcat entry buffer");
+		return -1;
+	}
+	
+	fd = open(mainlog, O_RDONLY);
+	if (fd < 0) {
+		ALOGE("Unable to open log device '%s': %s\n", mainlog, strerror(errno));
+		free(lce);
+		return -1;
+	}
+
+	/*ALOGD("filter: sec:%d, usec:%d", from->tv_sec, from->tv_usec);*/
+	
+	while (1) {
+	
+        do {
+            struct timeval timeout = { 0, 10000 /* 10ms */ }; 
+            FD_ZERO(&readset);
+            FD_SET(fd, &readset);
+            result = select(fd + 1, &readset, NULL, NULL, &timeout);
+        } while (result < 0 && errno == EINTR);
+		
+		// Wait until we find something...
+		if (result == 0) {
+			if (search_tmout > 0) {
+				search_tmout --;
+				continue;
+			} else
+				break;
+		}
+			
+		if (result > 0 && FD_ISSET(fd, &readset)) {
+		
+			/* NOTE: driver guarantees we read exactly one full entry */
+			int ret = read(fd, lce, LOGGER_ENTRY_MAX_LEN);
+			if (ret < 0) {
+				if (errno == EINTR) {
+					continue;
+				}
+				if (errno == EAGAIN) {
+					continue;
+				}
+				ALOGE("logcat read");
+				continue;
+			}
+			else if (!ret) {
+				ALOGE("read: Unexpected EOF!\n");
+				continue;
+			}
+			else if (lce->entry.len != ret - sizeof(struct logger_entry)) {
+				ALOGE("read: unexpected length. Expected %d, got %d\n",
+						lce->entry.len, ret - sizeof(struct logger_entry));
+				continue;
+			}
+			
+			lce->entry.msg[lce->entry.len] = '\0';
+			
+			/*
+			 * format: <priority:1><tag:N>\0<message:N>\0
+			 *
+			 * tag str
+			 *   starts at buf->msg+1
+			 * msg
+			 *   starts at buf->msg+1+len(tag)+1
+			 *
+			 * The message may have been truncated by the kernel log driver.
+			 * When that happens, we must null-terminate the message ourselves.
+			 */
+			 
+			/*ALOGD("entry: tag:%d[%c], sec:%d, usec:%d, n:%s, m:%s", lce->entry.msg[0], lce->entry.msg[0], lce->entry.sec, lce->entry.nsec/1000, &lce->entry.msg[1],(&lce->entry.msg[1])+strlen(&lce->entry.msg[1])+1); */
+			
+			// We are interested in pppd entries with I priority newer than specified
+			if ((lce->entry.msg[0] == 'i' || lce->entry.msg[0] == 'I' || lce->entry.msg[0] == 4) &&
+				(lce->entry.sec > from->tv_sec || 
+					(lce->entry.sec == from->tv_sec && (lce->entry.nsec/1000) >= from->tv_usec)) &&
+				!strcmp(&lce->entry.msg[1],pppd_str)) {
+				char * pos = NULL;
+				
+				// Dealing with PPPD entries in logcat - Get a pointer to the message
+				char * msg = (&lce->entry.msg[1]) + strlen(&lce->entry.msg[1]) + 1;
+								
+				// Strip leading spaces
+				while (*msg != 0 && *msg <= ' ') msg++;
+				
+				// And also strip trailing spaces...
+				pos = msg + strlen(msg);
+				while (pos != msg && pos[-1] <= ' ') pos--;
+				*pos = 0;
+				
+				// An entry we are interested in ?
+				if ((pos = strstr(msg,local_ip_str)) != NULL) {
+					strcpy(local_ip,msg + sizeof(local_ip_str) - 1);
+					strcpy(gw,msg + sizeof(local_ip_str) - 1);
+				} else
+				if ((pos = strstr(msg,remote_ip_str)) != NULL) {
+					// We found the remote_ip address ... Give no more than 3 seconds for the next entry to appear
+					// (those entries are not mandatory)
+					search_tmout = 300;
+				} else
+				if ((pos = strstr(msg,primary_dns_str)) != NULL) {
+					strcpy(dns1,msg + sizeof(primary_dns_str) - 1);
+				} else
+				if ((pos = strstr(msg,secondary_dns_str)) != NULL) {
+					strcpy(dns2,msg + sizeof(secondary_dns_str) - 1);
+				}
+			}
+			
+			// If we have all required data, break now!
+			if (local_ip[0] && gw[0] && dns1[0] && dns2[0]) {
+				break;
+			}
+		}
+	}
+	
+	close(fd);
+	free(lce);
+	
+	// Return if we succeeded or not
+	return local_ip[0] ? 0 : -1;
+}
+
+
 /* Setup connection using PPP */
 static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* pass)
 {
@@ -1247,6 +1383,7 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 	in_addr_t mask;
 	unsigned flags = 0;
 	int ctr = 10;
+	struct timeval from_tm;
 
     RIL_Data_Call_Response_v6 responses;
 	char ppp_ifname[PROPERTY_VALUE_MAX] = {'\0'};
@@ -1310,7 +1447,7 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 		"linkname ril%s "
 		"noauth "
 		"user %s password %s "		
-		"nodetach defaultroute usepeerdns noipdefault "
+		"defaultroute usepeerdns noipdefault "
 		"novj novjccomp nobsdcomp "
 		"ipcp-accept-remote ipcp-accept-local "
 		"dump debug "
@@ -1324,7 +1461,7 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 		"crtscts modem "
 		"linkname ril%s "
 		"user %s password %s "
-		"nodetach defaultroute usepeerdns noipdefault "
+		"defaultroute usepeerdns noipdefault "
 		"novj novjccomp nobsdcomp "
 		"ipcp-accept-remote ipcp-accept-local "
 		"dump debug "
@@ -1335,12 +1472,18 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 	asprintf(&cmd,fmt,ppp_iface_dev,ctxid, ((user && user[0])? user: "guest"), ((pass && pass[0])? pass: "guest") );
 	
 	ALOGD("Starting pppd w/command line: '%s'",cmd);
+	
+	// Get current time
+	gettimeofday(&from_tm,NULL);
+	
+	// Start PPPD
     system(cmd);
 	free(cmd);
 	
-#if 0
-	// Wait until network interface is up and running - Prefer the property
-	//  polling, as it makes sure ip.up script has executed
+#if 1
+	/* Try not to depend on ip-up/down scripts ... */
+
+	// Wait until network interface is up and running 
 	if (ifc_init() < 0) {
 		ALOGE("Failed initialization of net ifc");
 		return -1;
@@ -1360,11 +1503,13 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 		return -1;
 	}
 	
-	sprintf(ppp_local_ip,"%d.%d.%d.%d",
-		((unsigned char*)&addr)[0],
-		((unsigned char*)&addr)[1],
-		((unsigned char*)&addr)[2],
-		((unsigned char*)&addr)[3]);
+	/* Get PPP information by reading and parsing the PPPD log */
+	if (get_pppd_info(&from_tm, ppp_local_ip, ppp_dns1, ppp_dns2, ppp_gw) < 0) {
+		ALOGE("Unable to get dns/gw");
+		return -1;
+	}
+	
+	strcpy(ppp_ifname,PPP_IFACE);
 	
 #else
 	// Wait until ppp ip-up script has completely executed...
@@ -1378,8 +1523,7 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 	// Get local IP
 	sprintf(pbuf,"net.ril%s.local-ip",ctxid);
     property_get(pbuf, ppp_local_ip, NULL);
-#endif
-
+	
 	sprintf(pbuf,"net.ril%s.dns1",ctxid);	
     property_get(pbuf, ppp_dns1, NULL);
 
@@ -1389,6 +1533,8 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 	sprintf(pbuf,"net.ril%s.gw",ctxid);	
     property_get(pbuf, ppp_gw, NULL);
 	
+#endif
+
     sprintf(ppp_dnses, "%s %s", ppp_dns1, ppp_dns2);
 
 	ALOGI("Got ifname: %s, local-ip: %s, dns1: %s, dns2: %s, gw: %s\n",
@@ -2130,6 +2276,12 @@ static void onNewSmsOnSIM(const char *s)
     if (err < 0)
         goto error;
 
+	/* Huawei modems use a 0-based message slot index, but the SIM record is 1-based. 
+	   We will translate Huawei indices to Record indices, to make the Android RIL 
+	   able to read SMS stored in SIM using SimIo with the same indices as the Sms 
+	   delete command and NewSmsOnSim index */
+	index += 1;
+		
     RIL_onUnsolicitedResponse(RIL_UNSOL_RESPONSE_NEW_SMS_ON_SIM,
                               &index, sizeof(int *));
 
@@ -2338,8 +2490,19 @@ error:
 static void requestDeleteSmsOnSim(void *data, size_t datalen, RIL_Token t)
 {
     int err;
-
-    err = at_send_command("AT+CMGD=%d", ((int *) data)[0]);
+	
+	/* Huawei modems use a 0-based message slot index, but the SIM record is 1-based. 
+	   We will translate Huawei indices to Record indices, to make the Android RIL 
+	   able to read SMS stored in SIM using SimIo with the same indices as the Sms 
+	   delete command and NewSmsOnSim index */
+	int idx = ((int *) data)[0] - 1;
+	if (idx < 0) {
+		ALOGE("DeleteSmsOnSim: Invalid index! (%d)",idx);
+		RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+		return;
+	}
+	
+    err = at_send_command("AT+CMGD=%d", idx);
     if (err != AT_NOERROR)
         RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
     else
@@ -2759,6 +2922,114 @@ error:
  *
  * Reverse Engineered from Kuawei generic RIL *
  */
+ 
+typedef struct _tagSW1SW2{
+	unsigned char mask[2];
+	unsigned char sw[2];
+	char *text; 
+} SW1SW2;
+
+static const SW1SW2 sim_answ[]=
+{
+	  /* Response to commands which are correctly executed */
+      { { 0xff, 0xff }, { 0x90, 0x00 } , "Ok" },
+      { { 0xff, 0x00 }, { 0x9f, 0x00 } , "%d response bytes available" },
+	  /* Memory management */
+	  { { 0xff, 0x00 }, { 0x92, 0x00 } , "Update successful but after using an internal retry of %d times" },
+	  { { 0xff, 0xff }, { 0x92, 0x40 } , "memory problem" },
+	  /* Referencing management */
+	  { { 0xff, 0xff }, { 0x94, 0x00 } , "no EF selected" },
+	  { { 0xff, 0xff }, { 0x94, 0x02 } , "out of range (invalid address)" },
+	  { { 0xff, 0xff }, { 0x94, 0x04 } , "file ID or pattern not found" },
+	  { { 0xff, 0xff }, { 0x94, 0x08 } , "file is inconsistent with the command" },
+	  /* Security management */
+	  { { 0xff, 0xff }, { 0x98, 0x02 } , "no CHV initialised" },
+	  { { 0xff, 0xff }, { 0x98, 0x04 } , "access condition not fulfilled,authentication failed at least one attempt left" },
+	  { { 0xff, 0xff }, { 0x98, 0x08 } , "in contradiction with CHV status" },
+	  { { 0xff, 0xff }, { 0x98, 0x10 } , "in contradiction with invalidation stats" },
+	  { { 0xff, 0xff }, { 0x98, 0x40 } , "unsuccessful CHV verification,no attempt left. CHV blocked" },
+	  { { 0xff, 0xff }, { 0x98, 0x50 } , "increase cannot be performed,Max value reached" },
+	  
+      { { 0xff, 0x00 }, { 0x61, 0x00 } , "%d response bytes available" },
+
+      { { 0xff, 0xff }, { 0x62, 0x81 } , "returned data may be corrupt" },
+      { { 0xff, 0xff }, { 0x62, 0x82 } , "EOF reached prematurely" },
+      { { 0xff, 0xff }, { 0x62, 0x83 } , "selected file invalid" },
+      { { 0xff, 0xff }, { 0x62, 0x84 } , "FCI not formated" },
+      { { 0xff, 0x00 }, { 0x62, 0x00 } , "nvmem unchanged" },
+
+      { { 0xff, 0x00 }, { 0x63, 0x00 } , "nvmem changed" },
+      { { 0xff, 0x00 }, { 0x63, 0x81 } , "file filled up by last write" },
+      { { 0xff, 0xf0 }, { 0x63, 0xc0 } , "Counter=%1.1X" },
+
+      { { 0xff, 0xff }, { 0x64, 0x00 } , "nvmem unchanged" },
+      { { 0xff, 0x00 }, { 0x64, 0x00 } , "nvmem unchanged - RFU" },
+
+      { { 0xff, 0xff }, { 0x65, 0x00 } , "nvmem changed" },
+      { { 0xff, 0xff }, { 0x65, 0x81 } , "nvmem changed - memory failure" },
+      { { 0xff, 0x00 }, { 0x65, 0x00 } , "nvmem changed - unknown?" },
+
+      { { 0xff, 0x00 }, { 0x66, 0x00 } , "security related %d" },
+
+      { { 0xff, 0xff }, { 0x67, 0x00 } , "wrong length" },
+      { { 0xff, 0x00 }, { 0x67, 0x00 } , "wrong length - %d expected" },
+
+      { { 0xff, 0xff }, { 0x68, 0x81 } , "wrong cla - logical channel not supported" },
+      { { 0xff, 0xff }, { 0x68, 0x82 } , "wrong cla - secure messaging not supported" },
+      { { 0xff, 0x00 }, { 0x68, 0x00 } , "cla not supported" },
+
+      { { 0xff, 0xff }, { 0x69, 0x81 } , "command incompatible with file structure" },
+      { { 0xff, 0xff }, { 0x69, 0x82 } , "security status not satisfied" },
+      { { 0xff, 0xff }, { 0x69, 0x83 } , "authentication method blocked" },
+      { { 0xff, 0xff }, { 0x69, 0x84 } , "referenced data invalid" },
+      { { 0xff, 0xff }, { 0x69, 0x85 } , "conditions of use not satisfied" },
+      { { 0xff, 0xff }, { 0x69, 0x86 } , "command not allowed - no current EF" },
+      { { 0xff, 0xff }, { 0x69, 0x87 } , "expected SM data objects missing" },
+      { { 0xff, 0xff }, { 0x69, 0x88 } , "SM data objects incorrect" },
+      { { 0xff, 0x00 }, { 0x69, 0x00 } , "command not allowed" },
+
+      { { 0xff, 0xff }, { 0x6a, 0x80 } , "P1-P2: incorrect parameters in data field" },
+      { { 0xff, 0xff }, { 0x6a, 0x81 } , "P1-P2: function not supported" },
+      { { 0xff, 0xff }, { 0x6a, 0x82 } , "P1-P2: file not found" },
+      { { 0xff, 0xff }, { 0x6a, 0x83 } , "P1-P2: record not found" },
+      { { 0xff, 0xff }, { 0x6a, 0x84 } , "P1-P2: not enough memory space in file" },
+      { { 0xff, 0xff }, { 0x6a, 0x85 } , "P1-P2: Lc inconsistent with TLV" },
+      { { 0xff, 0xff }, { 0x6a, 0x86 } , "P1-P2 incorrect" },
+      { { 0xff, 0xff }, { 0x6a, 0x87 } , "P1-P2 inconsistent with Lc" },
+      { { 0xff, 0xff }, { 0x6a, 0x88 } , "Referenced data not found" },
+      { { 0xff, 0x00 }, { 0x6a, 0x00 } , "P1-P2 invalid" },
+
+      { { 0xff, 0x00 }, { 0x6b, 0x00 } , "P1-P2 invalid" },
+
+      { { 0xff, 0x00 }, { 0x6c, 0x00 } , "wrong length -  %d expected" },
+
+      { { 0xff, 0x00 }, { 0x6d, 0x00 } , "INS code not supported or invalid" },
+      
+      { { 0xff, 0x00 }, { 0x6e, 0x00 } , "CLA %02X not supported" },
+
+      { { 0xff, 0x00 }, { 0x6f, 0x00 } , "no precise diagnosis" },
+
+      { { 0x00, 0x00 }, { 0x00, 0x00 } , "Unknown response" }
+};
+ 
+/* Interpret and print SIM_IO command result */
+static void print_simansw(unsigned char sw1, unsigned char sw2)
+{
+	int j,i;
+	
+	ALOGD("sw1: 0x%02x, sw2: 0x%02x",sw1,sw2);	
+	for(j = 0; j < sizeof(sim_answ)/sizeof(sim_answ[0]); j++) {
+	
+		if ((sw1 & sim_answ[j].mask[0]) == sim_answ[j].sw[0] &&
+			(sw2 & sim_answ[j].mask[1]) == sim_answ[j].sw[1]) {
+			ALOGD(sim_answ[j].text,sw2);
+			return;
+		}
+	}		
+	
+	ALOGD("Unknown error");
+}
+
 static unsigned int hex2int(char dig)
 {
 	if (dig >= '0' && dig <= '9')
@@ -2838,6 +3109,9 @@ static void requestSIM_IO(void *data, size_t datalen, RIL_Token t)
 		err = at_tok_nextstr(&line, &(sr.simResponse));
 		if (err < 0) goto error;
 	}
+	
+	/* Interpret and print results as a debugging aid */
+	print_simansw(sr.sw1,sr.sw2);
 
 	/* If dealing with a USIM card ... */
 	if (p_args->command == 0xC0 &&
@@ -4570,17 +4844,40 @@ static void unsolicitedNitzTime(const char * s)
 {
     int err;
     char * response = NULL;
-    char * line = NULL;
-    char * p = NULL;
+    char * dt = NULL;
+	char * tm = NULL;
     char * tz = NULL; /* Timezone */
     static char sNITZtime[64] = {0};
 
-    line = strdup(s);
+    char * line = strdup(s);
 
     /* Higher layers expect a NITZ string in this format:
      *  08/10/28,19:08:37-20,1 (yy/mm/dd,hh:mm:ss(+/-)tz,dst)
      */
+	if (strStartsWith(s,"^NWTIME:")) {
+		/* Network time, as reported by Huawei modems:
+		   ^NWTIME: 12/09/22,08:33:59+8,01 */
+		
+        /* We got the network time, now assemble the response and send to upper layers */
+        at_tok_start(&line);
 
+        err = at_tok_nextstr(&line, &dt);
+        if (err < 0) goto error;
+
+        err = at_tok_nextstr(&line, &tm);
+        if (err < 0) goto error;
+
+        err = at_tok_nextstr(&line, &tz);
+        if (err < 0) goto error;
+
+        asprintf(&response, "%s,%s,%s", dt ,tm ,tz);
+        RIL_onUnsolicitedResponse(RIL_UNSOL_NITZ_TIME_RECEIVED, response, strlen(response));
+        free(response);
+
+        free(line);
+        return;
+		
+	} else	 
     if (strStartsWith(s,"+CTZV:")){
 
         /* Get Time and Timezone data and store in static variable.
@@ -4767,9 +5064,8 @@ static void unsolicitedRSSI(const char * s)
     int err;
     int rssi;
     RIL_SignalStrength_v6 signalStrength;
-    char * line = NULL;
-
-    line = strdup(s);
+	
+    char * line = strdup(s);
 
     err = at_tok_start(&line);
     if (err < 0) goto error;
@@ -4850,7 +5146,7 @@ error:
 
 static int requestNetworkRegistration()
 {
-   ATResponse *atResponse = NULL;
+	ATResponse *atResponse = NULL;
     int err;
     char *line;
 	int srv_status,srv_domain,nr = 0;
@@ -5723,10 +6019,64 @@ error:
 
 }
 
+/* decodes USSDs. Sometimes, they arrive as GSM8, sometimes they arrive as HEX encoded GSM7... */
+static char * decodeUSSD(const char* message)
+{
+	bytes_t utf8 = NULL;
+	
+	/* Could be in Hex or in GSM8 ... - Check it - Some modems return HEX 
+	   encoded GSM7, others return GSM8... */
+	int pos = 0;
+	int ishex = 1;
+	while (1) {
+		unsigned char c = message[pos];
+		if (!c) break;
+		if (!((c >= '0' && c <= '9') || ( c >= 'A' && c <= 'F' ))) {
+			ishex = 0;
+			break;
+		}
+		pos++;
+	};
+
+	/* Not hex encoded. Just convert to UTF-8 from GSM8 */
+	if (!ishex) {
+		
+		/* Convert GSM8 to UTF8 */
+		int gsmbytes = strlen(message);		
+		int utf8bytes = utf8_from_gsm8((cbytes_t)message,gsmbytes,NULL);
+		utf8 = malloc( utf8bytes + 1);
+		utf8_from_gsm8((cbytes_t)message,gsmbytes,utf8);
+		utf8[utf8bytes]= '\0';
+
+	} else {
+	
+		int gsmseptets;
+		int utf8bytes;
+
+		/* Convert HEX to GSM7 */
+		int hexlen = strlen(message);
+		int binlen = (hexlen + 1) >> 1;
+		bytes_t bytes = malloc(binlen + 1);
+		gsm_hex_to_bytes((cbytes_t)message,hexlen,bytes);
+		bytes[binlen] = 0;
+
+		/* And then, GSM7 to UTF8 */
+		gsmseptets = (binlen * 8) / 7; // Round DOWN
+		utf8bytes = utf8_from_gsm7(bytes, 0, gsmseptets, NULL);
+		utf8 = malloc(utf8bytes + 1);
+		utf8_from_gsm7(bytes, 0, gsmseptets, utf8);
+		utf8[utf8bytes] = 0;
+		free(bytes);
+	}
+	
+	return utf8;
+}
+
 static void unsolicitedUSSD(const char *s)
 {
     char *line, *linestart;
     int typeCode, count, err;
+	char *message;
     char *responseStr[2] = {0,0};
 
     D("unsolicitedUSSD %s\n",s);
@@ -5742,9 +6092,13 @@ static void unsolicitedUSSD(const char *s)
 	if (typeCode < 0 || typeCode > 5) goto error;
 	
 	if (at_tok_hasmore(&line)) {
-        err = at_tok_nextstr(&line, &responseStr[1]);
+		
+		err = at_tok_nextstr(&line, &message);
         if(err < 0) goto error;
 
+		/* Decode message */
+		responseStr[1] = (char*) decodeUSSD(message);
+		
         count = 2;
 		
     } else {
@@ -5760,6 +6114,8 @@ static void unsolicitedUSSD(const char *s)
 	free(linestart);
     if (responseStr[0])
         free(responseStr[0]);
+	if (responseStr[1])
+		free(responseStr[1]);
 
     return;
 
@@ -6024,16 +6380,57 @@ static void requestSendUSSD(void *data, size_t datalen, RIL_Token t)
      *   1101..1110 Reserved for European languages
      *   1111 Language unspecified
      *
-     * According to Android ril.h , CUSD messages are allways sent as utf8,
+     * According to Android ril.h , CUSD messages are always sent as utf8,
      * but the dcs field does not have an entry for this.
      * The nearest "most correct" would be 15 = unspecified,
-     * not adding the dcs would result in the default "0" meanig German,
+     * not adding the dcs would result in the default "0" meaning German,
      * and some networks are not happy with this.
+	 *
+	 * Huawei modems, depending on firmware version, seem to accept GSM8 or
+	 *  a HEX encoded GSM7 request. Try GSM8; if it fails, try GSM7 encoded in HEX
      */
 	
-    err = at_send_command("AT+CUSD=1,%s,15", ussdRequest);
-    if (err != AT_NOERROR)
-        goto error;
+	/* Convert to GSM8 from UTF8 */
+	int utf8len = strlen((const char*)ussdRequest);
+	int gsmbytes = utf8_to_gsm8(ussdRequest, utf8len, NULL);
+	bytes_t gsm8 = malloc(gsmbytes + 1);
+	utf8_to_gsm8(ussdRequest, utf8len, gsm8);
+	gsm8[gsmbytes] = 0;
+	
+	/* Try to send it as GSM8 */	
+    err = at_send_command("AT+CUSD=1,%s,15", gsm8);
+	
+	/* Some modems like the string to be between quotes ... Retry if error */
+	if (err != AT_NOERROR) {
+		err = at_send_command("AT+CUSD=1,\"%s\",15", gsm8);
+	}
+	free(gsm8);
+	
+	/* If modem did not accept the USSD, retry it but using HEX encoded GSM7 */
+    if (err != AT_NOERROR) {
+		char* hex = NULL;
+	
+		/* Convert to GSM7 */
+		int gsmseptets = utf8_to_gsm7(ussdRequest, utf8len, NULL, 0); 
+		int gsmbytes = ((gsmseptets * 7) + 7) / 8; // Round UP, to be able to transmit incomplete septets
+		bytes_t gsm7 = malloc(gsmbytes + 1);
+		utf8_to_gsm7(ussdRequest, utf8len, gsm7, 0);
+		gsm7[gsmbytes] = 0;
+			
+		/* And then encode to HEX */
+		hex = malloc(2*gsmbytes+1);
+		gsm_hex_from_bytes(hex, gsm7, gsmbytes);
+		hex[2*gsmbytes]='\0';
+		
+		/* Retry to send the command */
+		ALOGD("utf8len: %d, gsmseptets: %d, gsmbytes:%d", utf8len, gsmseptets, gsmbytes);
+		err = at_send_command("AT+CUSD=1,\"%s\",15", hex);
+		free(gsm7);
+		free(hex);
+		
+		if (err != AT_NOERROR)
+			goto error;
+	}
 
     RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
     return;
@@ -6173,7 +6570,7 @@ static void requestLastFailCause(RIL_Token t)
 
     err = at_send_command_singleline("AT+CEER", "+CEER:", &atResponse);
     if(err != AT_NOERROR)
-        goto error1;
+        goto error;
 
 	/*
 	CALL_FAIL_NORMAL = 16,
@@ -6187,19 +6584,19 @@ static void requestLastFailCause(RIL_Token t)
 		
     line = atResponse->p_intermediates->line;
     err = at_tok_start(&line);
-    if(err < 0) goto error1;
+    if(err < 0) goto error;
 
     err = at_tok_nextstr(&line, &tmp);
-    if(err < 0) goto error1;
+    if(err < 0) goto error;
 
     if (at_tok_hasmore(&line)) {
 		err = at_tok_nextint(&line, &response);
-		if(err < 0) goto error1;
+		if(err < 0) goto error;
 	}
 
 	ALOGD("Textual last call fail cause: %s [%d]", tmp, response);
-error1:
-	at_response_free(atResponse);
+	
+error:
 
 	/* Send the last call fail cause */
     RIL_onRequestComplete(t, RIL_E_SUCCESS, &lastCallFailCause, sizeof(int));
@@ -6398,8 +6795,12 @@ static void onSIMReady(void *p)
 	/*  Connected line identification On*/
 	at_send_command("AT+COLP=1");
 
-	/*  IRA character set */
-    at_send_command("AT+CSCS=\"IRA\"");
+	/*
+	 * Ensure that the modem is using GSM character set and not IRA,
+	 * otherwise weirdness with umlauts and other non-ASCII characters
+	 * can result
+	 */ 
+    at_send_command("AT+CSCS=\"GSM\"");
 
 	/*  USSD unsolicited */
 	at_send_command("AT+CUSD=1");
@@ -6987,7 +7388,9 @@ static void onUnsolicited (const char *s, const char *sms_pdu)
     if (strStartsWith(s, "%CTZV:")
             || strStartsWith(s,"+CTZV:")
             || strStartsWith(s,"+CTZDST:")
-            || strStartsWith(s,"+HTCCTZV:")) {
+            || strStartsWith(s,"+HTCCTZV:")
+			|| strStartsWith(s,"^NWTIME:")
+			) {
         unsolicitedNitzTime(s);
 	
 	/* Call status/start/end indicator */
@@ -7057,7 +7460,8 @@ static void onUnsolicited (const char *s, const char *sms_pdu)
         onNewSms(sms_pdu);
     } else if (strStartsWith(s, "+CBM:")) {
         onNewBroadcastSms(sms_pdu);
-    } else if (strStartsWith(s, "+CMTI:")) {
+    } else if (strStartsWith(s, "+CMTI:")
+			|| strStartsWith(s, "+CDSI:")) {
         onNewSmsOnSIM(s);
     } else if (strStartsWith(s, "+CDS:")) {
         onNewStatusReport(sms_pdu);
@@ -7071,7 +7475,8 @@ static void onUnsolicited (const char *s, const char *sms_pdu)
     } else if (strStartsWith(s, "+CUSD:")) {
         unsolicitedUSSD(s);
     } else if (strStartsWith(s, "+CIEV: 7") ||
-               strStartsWith(s, "Received SMS:")) {
+               strStartsWith(s, "Received SMS:") ||
+			   strStartsWith(s, "^SMMEMFULL") ) {
         onNewSmsIndication();
     }
 }
@@ -7125,7 +7530,7 @@ static void onATTimeout()
 static void usage(char *s)
 {
 #ifdef RIL_SHLIB
-    fprintf(stderr, "htcgeneric-ril requires: -p <tcp port> or -d /dev/tty_device\n");
+    fprintf(stderr, "generic-ril requires: -p <tcp port> or -d /dev/tty_device\n");
 #else
     fprintf(stderr, "usage: %s [-p <tcp port>] [-d /dev/tty_device] [-v /dev/tty_device]\n", s);
     exit(-1);
@@ -7313,8 +7718,29 @@ const RIL_RadioFunctions *RIL_Init(const struct RIL_Env *env, int argc,
     struct queueArgs *queueArgs;
     pthread_attr_t attr;
 
-    s_rilenv = env;
+#if 0
+	/* Logcat test */
+	char local_ip[64];
+	char dns1[64];
+	char dns2[64];
+	char gw[64];
+	struct timeval from;
+	int rr;
+	gettimeofday(&from,NULL);
+	rr = get_pppd_info(&from,local_ip, dns1, dns2, gw);
+	ALOGD("result: %d",rr);
+#endif
 
+#if 0
+	char * m = decodeUSSD("D9775D0E6286E7749050FEBECFD3EE33685A9ECFD36F37283D07BDCD201868297449CBED70DA9D769F414679B90C2287E96190FDCDAEB7CBA0F41C849BCD60B41C68297401");
+	ALOGD("Decoded msg: '%s'",m);
+	free(m);
+#endif	
+
+	memset(&sAudioChannel,0,sizeof(sAudioChannel));
+	
+	s_rilenv = env;
+	
     /* By default, use USB1 as audio channel */
     strcpy(sAudioDevice,"/dev/ttyUSB1");
 
@@ -7391,6 +7817,8 @@ int main (int argc, char **argv)
     const char *ctrl_path = NULL;
     struct queueArgs *queueArgs;
 
+	memset(&sAudioChannel,0,sizeof(sAudioChannel));
+	
     /* By default, use USB1 as audio channel */
     strcpy(sAudioDevice,"/dev/ttyUSB1");
 

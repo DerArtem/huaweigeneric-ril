@@ -4,10 +4,12 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := \
+	agc.c \
     at_tok.c \
     atchannel.c \
     audiochannel.cpp \
 	audioqueue.c \
+	echocancel.c \
     fcp_parser.c \
     gsm.c \
     huaweigeneric-ril.c \
@@ -15,7 +17,7 @@ LOCAL_SRC_FILES := \
 	net-utils.c \
     requestdatahandler.c \
     sms.c \
-    sms_gsm.c \
+    sms_gsm.c
 
 LOCAL_SHARED_LIBRARIES := \
     libcutils \
@@ -34,4 +36,5 @@ LOCAL_C_INCLUDES := \
 LOCAL_MODULE:= libhuaweigeneric-ril
 LOCAL_MODULE_TAGS := optional
 
+#
 include $(BUILD_SHARED_LIBRARY)
