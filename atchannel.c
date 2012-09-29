@@ -280,6 +280,7 @@ static const char * s_finalResponsesError[] = {
     "NO CARRIER",      /* Sometimes! */
     "NO ANSWER",
     "NO DIALTONE",
+    "COMMAND NOT SUPPORT",
 };
 
 static int isFinalResponseError(const char *line)
