@@ -151,10 +151,10 @@ static void onDataCallListChanged(void *param);
 static int killConn(const char * cid);
 static int wait_for_property(const char *name, const char *desired_value, int maxwait, int allowempty);
 static void checkMessageStorageReady(void *p);
+static int pppSupported(void);
 static void onSIMReady(void *p);
 static void pollSIMState(void *param);
 static void checkMessageStorageReady(void *p);
-static int pppSupported(void);
 
 extern const char * requestToString(int request);
 
@@ -3684,13 +3684,18 @@ static void requestEnterSimPin(void *data, size_t datalen, RIL_Token t, int requ
             goto error;
         }
     } else {
-        /*
-         * Got OK, return success and wait for *EPEV to trigger poll
-         * of SIM state.
-         */
+        /* Got OK, return success. */
 
         num_retries = 1;
         RIL_onRequestComplete(t, RIL_E_SUCCESS, &num_retries, sizeof(int *));
+		
+		/* Make sure we get notifications for network registeration
+		   of both voice and data now */
+		at_send_command("AT+CREG=2");
+		at_send_command("AT+CGREG=2");
+
+		/* Notify that SIM is ready */
+		setRadioState(RADIO_STATE_SIM_READY);
     }
     return;
 error:
@@ -5533,13 +5538,11 @@ static void requestGetIMSI(RIL_Token t)
     at_response_free(atResponse);
 }
 
-
-
 /**
  * RIL_REQUEST_GET_IMEI
  *
  * Get the device IMEI, which should be 15 decimal digits.
-*/
+ */
 static void requestGetIMEI(RIL_Token t)
 {
     ATResponse *atResponse = NULL;
@@ -5560,9 +5563,7 @@ error:
     RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
     at_response_free(atResponse);
 }
-
-
-
+	 
 /**
  * RIL_REQUEST_GET_IMEISV
  *
@@ -5573,9 +5574,8 @@ static void requestGetIMEISV(RIL_Token t)
     RIL_onRequestComplete(t, RIL_E_SUCCESS, (void*)"01", sizeof(char *));
 }
 
-
-
-/* RIL_REQUEST_DEVICE_IDENTITY
+/**
+ * RIL_REQUEST_DEVICE_IDENTITY
  *
  * Request the device ESN / MEID / IMEI / IMEISV.
  *
