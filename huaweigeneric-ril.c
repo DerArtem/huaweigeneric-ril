@@ -283,6 +283,12 @@ static void startAudioTunnel(void* param)
 	framesize_ms = 20;
 #endif
 	
+	/* Increase volume to maximum. Some modems do not set the volume if not
+	  actually changing values.... And some of them do not understand the 
+	  command at all. Try to switch volume to maximum - DerArtem */
+	err = at_send_command("AT+CLVL=1"); /* Lo volume */
+	err = at_send_command("AT+CLVL=5"); /* Maximum volume */
+	
     /* Start the audio channel */
     err = gsm_audio_tunnel_start(&sAudioChannel,sAudioDevice,
                 sampling_rate, (sampling_rate * framesize_ms) / 1000, bits_per_sample );
@@ -1933,6 +1939,27 @@ static void requestOrSendPDPContextList(RIL_Token *t)
     at_response_free(atResponse);
     atResponse = NULL;
 
+	/* Make sure interface is UP and running. If not, invalidate datacall to 
+	   force Android to reconnect - This will happen when resuming from suspend, as pppd
+	   has probably ended as a consequence of the USB bus being suspended and the terminal
+	   disappearing. So, that is why we have this check here. Not only the modem has to
+	   report an active connection, also linux has to export an active net interface !*/
+	if (ifc_init() >= 0) {
+		in_addr_t addr;
+		in_addr_t mask;
+		unsigned flags = 0;
+		ifc_get_info( responses[i].ifname, &addr, &mask, &flags);
+		if (!(flags & IFF_UP)) {
+			for (i = 0; i < n; i++) {
+				if (responses[i].active) {
+					ALOGD("DataCall cid:%d forced to inactive, as associated interface [%s] is DOWN", responses[i].cid, responses[i].ifname );
+					responses[i].active = 0;
+				}
+			}
+		}
+		ifc_close();
+	}
+	
     if (t != NULL)
         RIL_onRequestComplete(*t, RIL_E_SUCCESS, responses,
                 n * sizeof(RIL_Data_Call_Response_v6));
@@ -4604,7 +4631,6 @@ error:
     RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
     goto finally;
 }
-
 
 /**
  * RIL_REQUEST_DATA_REGISTRATION_STATE
