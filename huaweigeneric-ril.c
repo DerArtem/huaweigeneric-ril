@@ -1049,18 +1049,6 @@ static int wait_for_property(const char *name, const char *desired_value, int ma
     return -1; /* failure */
 }
 
-/* Wait for pending output to be written on FD.  */
-static int tcdrain (int fd)
-{
-	/* The TIOCSETP control waits for pending output to be written before
-	affecting its changes, so we use that without changing anything.  */
-	struct sgttyb b;
-	if (ioctl (fd, TIOCGETP, (void *) &b) < 0 ||
-		ioctl (fd, TIOCSETP, (void *) &b) < 0)
-			return -1;
-	return 0;
-}
-
 #ifdef ORG_DIAL
 /* Write an string to the modem */
 static int dial_at_modem(const char* cmd, int skipanswerwait)

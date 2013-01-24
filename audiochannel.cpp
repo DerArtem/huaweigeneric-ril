@@ -671,7 +671,6 @@ int gsm_audio_tunnel_start(struct GsmAudioTunnel *ctx,const char* gsmvoicechanne
                     format,
                     AUDIO_CHANNEL_IN_MONO,
                     recBuffSize,
-					android::AudioRecord::RECORD_AGC_ENABLE, 	//flags
                     &AndroidRecorderCallback,
                     (void *) ctx,
                     recNotifyBuffSize, // Notification frames
