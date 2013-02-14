@@ -5150,36 +5150,82 @@ error:
 
 static void unsolicitedMode(const char * s)
 {
-    int err;
-    int mode1;
-    int mode2;
-    char * line = NULL;
+	int err;
+	int android_mode;
+	int sys_mode;
+	int sys_submode;
+	char * line = NULL;
 
-    /*
-    ^MODE:3,2 indicates GPRS
-    ^MODE:3,3 indicates EDGE
-    ^MODE:5,4 indicates 3G
-    ^MODE:5,5 indicates HSDPA
-    */
+	/*
+	^MODE:<sys_mode>,<sys_submode>
 
-    line = strdup(s);
+	<sys_mode>: System mode. The values are as follows:
+	0    No service.
+	1    AMPS mode (not in use currently)
+	2    CDMA mode (not in use currently)
+	3    GSM/GPRS mode
+	4    HDR mode
+	5    WCDMA mode
+	6    GPS mode
+	<sys_submode>: System sub mode. The values are as follows:
+	0    No service.
+	1    GSM mode
+	2    GPRS mode
+	3    EDEG mode
+	4    WCDMA mode
+	5    HSDPA mode
+	6    HSUPA mode
+	7    HSDPA mode and HSUPA mode
+	*/
 
-    err = at_tok_start(&line);
-    if (err < 0) goto error;
+	line = strdup(s);
 
-    err = at_tok_nextint(&line, &mode1);
-    if (err < 0) goto error;
+	err = at_tok_start(&line);
+	if (err < 0) goto error;
 
-    err = at_tok_nextint(&line, &mode2);
-    if (err < 0) goto error;
+	err = at_tok_nextint(&line, &sys_mode);
+	if (err < 0) goto error;
 
-    free(line);
-    return;
+	err = at_tok_nextint(&line, &sys_submode);
+	if (err < 0) goto error;
+
+	switch (sys_submode)
+	{
+		case 0:
+			android_mode = RADIO_TECH_UNKNOWN;
+			break;
+		case 1:
+			android_mode = RADIO_TECH_GSM;
+			break;
+		case 2:
+			android_mode = RADIO_TECH_GPRS;
+			break;
+		case 3:
+			android_mode = RADIO_TECH_EDGE;
+			break;
+		case 4:
+			android_mode = RADIO_TECH_UMTS;
+			break;
+		case 5:
+			android_mode = RADIO_TECH_HSDPA;
+			break;
+		case 6:
+			android_mode = RADIO_TECH_HSUPA;
+			break;
+		case 7:
+			android_mode = RADIO_TECH_HSPA;
+			break;
+	}
+
+	free(line);
+
+	RIL_onUnsolicitedResponse(RIL_UNSOL_VOICE_RADIO_TECH_CHANGED, &android_mode, sizeof(int *));
+	return;
 
 error:
-    ALOGI("Error getting mode");
-    free(line);
-    return;
+	ALOGI("Error getting mode");
+	free(line);
+	return;
 }
 
 
