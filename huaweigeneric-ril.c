@@ -4464,7 +4464,7 @@ enum CREG_stat {
  *
  * Request current registration state.
  */
-static void requestRegistrationState(RIL_Token t)
+static void requestRegistrationState(RIL_Token t, int data)
 {
     int err = 0;
     const char resp_size = 15;
@@ -4475,6 +4475,8 @@ static void requestRegistrationState(RIL_Token t)
     int commas = 0;
     int skip, cs_status = 0;
     int i;
+    const char *cmd;
+    const char *prefix;
 
     /* Setting default values in case values are not returned by AT command */
     for (i = 0; i < resp_size; i++)
@@ -4482,7 +4484,15 @@ static void requestRegistrationState(RIL_Token t)
 
     memset(response, 0, sizeof(response));
 
-    err = at_send_command_singleline("AT+CREG?", "+CREG:", &cgreg_resp);
+    if (data == 0) {
+        cmd = "AT+CREG?";
+        prefix = "+CREG:";
+    } else {
+        cmd = "AT+CGREG?";
+        prefix = "+CGREG:";
+    }
+
+    err = at_send_command_singleline(cmd, prefix, &cgreg_resp);
     if (err != AT_NOERROR)
         goto error;
 
@@ -4571,6 +4581,61 @@ static void requestRegistrationState(RIL_Token t)
             goto error;
 
         err = at_tok_nexthexint(&line, &response[2]);
+
+	/* Hack for broken +CGREG responses which don't return the network type */
+		ATResponse *p_response_op = NULL;
+		err = at_send_command_singleline("AT+COPS?", "+COPS:", &p_response_op);
+		/* We need to get the 4th return param */
+		int commas_op;
+		commas_op = 0;
+		char *p_op, *line_op;
+		line_op = p_response_op->p_intermediates->line;
+
+		for (p_op = line_op ; *p_op != '\0' ;p_op++) {
+			if (*p_op == ',') commas_op++;
+		}
+
+		if (commas_op == 3) {
+			err = at_tok_start(&line_op);
+			err = at_tok_nextint(&line_op, &skip);
+			if (err < 0) goto error;
+			err = at_tok_nextint(&line_op, &skip);
+			if (err < 0) goto error;
+			err = at_tok_nextint(&line_op, &skip);
+			if (err < 0) goto error;
+			err = at_tok_nextint(&line_op, &response[3]);
+			if (err < 0) goto error;
+			/* Now translate to 'Broken Android Speak' - can't follow the GSM spec */
+			switch(response[3]) {
+				/* GSM/GSM Compact - aka GRPS */
+			case 0:
+			case 1:
+				response[3] = 1;
+				break;
+
+			/* EGPRS - aka EDGE */
+                        case 3:
+				response[3] = 2;
+				break;
+
+			/* UTRAN - UMTS aka 3G */
+			case 2:
+			case 7:
+				response[3] = 3;
+				break;
+
+			/* UTRAN with HSDPA and/or HSUPA aka Turbo-3G*/
+			case 4:
+			case 5:
+			case 6:
+				response[3] = 9;
+				break;
+			}
+		}
+
+		at_response_free(p_response_op);
+		/* End hack */
+
         if (err < 0)
             goto error;
         break;
@@ -4585,10 +4650,11 @@ static void requestRegistrationState(RIL_Token t)
         asprintf(&responseStr[1], "%04x", response[1]);
     if (response[2] > 0)
         asprintf(&responseStr[2], "%08x", response[2]);
+    if (response[3] > 0)
+        asprintf(&responseStr[3], "%d", response[3]);
 
-    if (response[0] == CGREG_STAT_REG_HOME_NET ||
-        response[0] == CGREG_STAT_ROAMING)
-        responseStr[3] = (0);
+    if (data == 1)
+	responseStr[5] = (char*) "1";
 
     RIL_onRequestComplete(t, RIL_E_SUCCESS, responseStr,
                           resp_size * sizeof(char *));
@@ -4606,170 +4672,6 @@ error:
     RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
     goto finally;
 }
-
-/**
- * RIL_REQUEST_DATA_REGISTRATION_STATE
- *
- * Request current GPRS registration state.
- */
-static void requestGprsRegistrationState(RIL_Token t)
-{
-    int err = 0;
-    const char resp_size = 6;
-    int response[resp_size];
-    char *responseStr[resp_size];
-    ATResponse *atResponse = NULL;
-    char *line, *p;
-    int commas = 0;
-    int skip, tmp;
-    int count = 3;
-
-    memset(responseStr, 0, sizeof(responseStr));
-    memset(response, 0, sizeof(response));
-    response[1] = -1;
-    response[2] = -1;
-
-    err = at_send_command_singleline("AT+CGREG?", "+CGREG: ", &atResponse);
-    if (err != AT_NOERROR)
-        goto error;
-
-    line = atResponse->p_intermediates->line;
-    err = at_tok_start(&line);
-    if (err < 0)
-        goto error;
-    /*
-     * The solicited version of the +CGREG response is
-     * +CGREG: n, stat, [lac, cid [,<AcT>]]
-     * and the unsolicited version is
-     * +CGREG: stat, [lac, cid [,<AcT>]]
-     * The <n> parameter is basically "is unsolicited creg on?"
-     * which it should always be.
-     *
-     * Now we should normally get the solicited version here,
-     * but the unsolicited version could have snuck in
-     * so we have to handle both.
-     *
-     * Also since the LAC, CID and AcT are only reported when registered,
-     * we can have 1, 2, 3, 4 or 5 arguments here.
-     */
-    /* Count number of commas */
-    p = line;
-    err = at_tok_charcounter(line, ',', &commas);
-    if (err < 0) {
-        ALOGE("%s() at_tok_charcounter failed", __func__);
-        goto error;
-    }
-
-    switch (commas) {
-    case 0:                    /* +CGREG: <stat> */
-        err = at_tok_nextint(&line, &response[0]);
-        if (err < 0) goto error;
-        break;
-
-    case 1:                    /* +CGREG: <n>, <stat> */
-        err = at_tok_nextint(&line, &skip);
-        if (err < 0) goto error;
-        err = at_tok_nextint(&line, &response[0]);
-        if (err < 0) goto error;
-        break;
-
-    case 2:                    /* +CGREG: <stat>, <lac>, <cid> */
-        err = at_tok_nextint(&line, &response[0]);
-        if (err < 0) goto error;
-        err = at_tok_nexthexint(&line, &response[1]);
-        if (err < 0) goto error;
-        err = at_tok_nexthexint(&line, &response[2]);
-        if (err < 0) goto error;
-        break;
-
-    case 3:                    /* +CGREG: <n>, <stat>, <lac>, <cid> */
-                               /* +CGREG: <stat>, <lac>, <cid>, <AcT> */
-        err = at_tok_nextint(&line, &tmp);
-        if (err < 0) goto error;
-
-        /* We need to check if the second parameter is <lac> */
-        if (*(line) == '"') {
-            response[0] = tmp; /* <stat> */
-            err = at_tok_nexthexint(&line, &response[1]); /* <lac> */
-            if (err < 0) goto error;
-            err = at_tok_nexthexint(&line, &response[2]); /* <cid> */
-            if (err < 0) goto error;
-            err = at_tok_nextint(&line, &response[3]); /* <AcT> */
-            if (err < 0) goto error;
-            count = 4;
-        } else {
-            err = at_tok_nextint(&line, &response[0]); /* <stat> */
-            if (err < 0) goto error;
-            err = at_tok_nexthexint(&line, &response[1]); /* <lac> */
-            if (err < 0) goto error;
-            err = at_tok_nexthexint(&line, &response[2]); /* <cid> */
-            if (err < 0) goto error;
-        }
-        break;
-
-    case 4:                    /* +CGREG: <n>, <stat>, <lac>, <cid>, <AcT> */
-        err = at_tok_nextint(&line, &skip); /* <n> */
-        if (err < 0) goto error;
-        err = at_tok_nextint(&line, &response[0]); /* <stat> */
-        if (err < 0) goto error;
-        err = at_tok_nexthexint(&line, &response[1]); /* <lac> */
-        if (err < 0) goto error;
-        err = at_tok_nexthexint(&line, &response[2]); /* <cid> */
-        if (err < 0) goto error;
-        err = at_tok_nextint(&line, &response[3]); /* <AcT> */
-        if (err < 0) goto error;
-        count = 4;
-        break;
-
-    default:
-        ALOGE("%s() Invalid input", __func__);
-        goto error;
-    }
-
-    /* Converting to stringlist for Android */
-
-    asprintf(&responseStr[0], "%d", response[0]); /* state */
-
-    if (response[1] >= 0)
-        asprintf(&responseStr[1], "%04x", response[1]); /* LAC */
-    else
-        responseStr[1] = NULL;
-
-    if (response[2] >= 0)
-        asprintf(&responseStr[2], "%08x", response[2]); /* CID */
-    else
-        responseStr[2] = NULL;
-
-    if (response[0] == CGREG_STAT_REG_HOME_NET ||
-        response[0] == CGREG_STAT_ROAMING)
-        asprintf(&responseStr[3], "%d",response[3]);
-    else
-        responseStr[3] = NULL;
-
-    responseStr[5] = (char*) "1";
-
-    RIL_onRequestComplete(t, RIL_E_SUCCESS, responseStr, resp_size * sizeof(char *));
-
-finally:
-
-    if (responseStr[0])
-        free(responseStr[0]);
-    if (responseStr[1])
-        free(responseStr[1]);
-    if (responseStr[2])
-        free(responseStr[2]);
-    if (responseStr[3])
-        free(responseStr[3]);
-
-    at_response_free(atResponse);
-    return;
-
-error:
-    ALOGE("%s Must never return an error when radio is on", __func__);
-    RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
-    goto finally;
-}
-
 
 /**
  * RIL_REQUEST_OEM_HOOK_RAW
@@ -5072,8 +4974,10 @@ static void unsolicitedRSSI(const char * s)
     int err;
     int rssi;
     RIL_SignalStrength_v6 signalStrength;
-	
+
     char * line = strdup(s);
+
+    memset(&signalStrength, 0, sizeof(RIL_SignalStrength_v6));
 
     err = at_tok_start(&line);
     if (err < 0) goto error;
@@ -5083,16 +4987,6 @@ static void unsolicitedRSSI(const char * s)
 
     signalStrength.GW_SignalStrength.signalStrength = rssi;
     signalStrength.GW_SignalStrength.bitErrorRate = 99;
-    signalStrength.CDMA_SignalStrength.dbm = 0;
-    signalStrength.CDMA_SignalStrength.ecio = 0;
-    signalStrength.EVDO_SignalStrength.dbm = 0;
-    signalStrength.EVDO_SignalStrength.ecio = 0;
-    signalStrength.EVDO_SignalStrength.signalNoiseRatio = 0;
-    signalStrength.LTE_SignalStrength.signalStrength = 0;
-    signalStrength.LTE_SignalStrength.rsrp = 0;
-    signalStrength.LTE_SignalStrength.rsrq = 0;
-    signalStrength.LTE_SignalStrength.rssnr = 0;
-    signalStrength.LTE_SignalStrength.cqi = 0;
 
     ALOGI("Signal Strength %d", rssi);
 
@@ -5307,12 +5201,6 @@ static void requestSignalStrength(RIL_Token t)
 
     memset(&signalStrength, 0, sizeof(RIL_SignalStrength_v6));
 
-    signalStrength.LTE_SignalStrength.signalStrength = 0x7FFFFFFF;
-    signalStrength.LTE_SignalStrength.rsrp = 0x7FFFFFFF;
-    signalStrength.LTE_SignalStrength.rsrq = 0x7FFFFFFF;
-    signalStrength.LTE_SignalStrength.rssnr = 0x7FFFFFFF;
-    signalStrength.LTE_SignalStrength.cqi = 0x7FFFFFFF;
-
     err = at_send_command_singleline("AT+CSQ", "+CSQ:", &atResponse);
     if (err != AT_NOERROR)
         goto error;
@@ -5322,27 +5210,14 @@ static void requestSignalStrength(RIL_Token t)
     err = at_tok_start(&line);
     if (err < 0) goto error;
 
-    err = at_tok_nextint(&line,&rssi);
+    err = at_tok_nextint(&line, &rssi);
+    if (err < 0) goto error;
+
+    err = at_tok_nextint(&line, &ber);
     if (err < 0) goto error;
 
     signalStrength.GW_SignalStrength.signalStrength = rssi;
-
-    err = at_tok_nextint(&line, &ber);
-    if (err < 0)
-        goto error;
-
     signalStrength.GW_SignalStrength.bitErrorRate = ber;
-
-    signalStrength.CDMA_SignalStrength.dbm = 0;
-    signalStrength.CDMA_SignalStrength.ecio = 0;
-    signalStrength.EVDO_SignalStrength.dbm = 0;
-    signalStrength.EVDO_SignalStrength.ecio = 0;
-    signalStrength.EVDO_SignalStrength.signalNoiseRatio = 0;
-    signalStrength.LTE_SignalStrength.signalStrength = 0;
-    signalStrength.LTE_SignalStrength.rsrp = 0;
-    signalStrength.LTE_SignalStrength.rsrq = 0;
-    signalStrength.LTE_SignalStrength.rssnr = 0;
-    signalStrength.LTE_SignalStrength.cqi = 0;
 
     ALOGI("SignalStrength %d BER: %d", rssi, ber);
 
@@ -7043,12 +6918,12 @@ static void processRequest (int request, void *data, size_t datalen, RIL_Token t
         case RIL_REQUEST_GET_PREFERRED_NETWORK_TYPE:
             requestGetPreferredNetworkType(t);
             break;
-        case RIL_REQUEST_VOICE_REGISTRATION_STATE:
-            requestRegistrationState(t);
-            break;
         case RIL_REQUEST_DATA_REGISTRATION_STATE:
-            requestGprsRegistrationState(t);
-            break;
+            requestRegistrationState(t, 1);
+	    break;
+        case RIL_REQUEST_VOICE_REGISTRATION_STATE:
+            requestRegistrationState(t, 0);
+	    break;
 
         /* OEM */
         case RIL_REQUEST_OEM_HOOK_RAW:
