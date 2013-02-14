@@ -4985,12 +4985,14 @@ static void unsolicitedRSSI(const char * s)
     err = at_tok_nextint(&line, &rssi);
     if (err < 0) goto error;
 
+    if (rssi = 99) return;
+
     signalStrength.GW_SignalStrength.signalStrength = rssi;
     signalStrength.GW_SignalStrength.bitErrorRate = 99;
 
     ALOGI("Signal Strength %d", rssi);
 
-    RIL_onUnsolicitedResponse(RIL_UNSOL_SIGNAL_STRENGTH, &signalStrength, sizeof(signalStrength));
+    RIL_onUnsolicitedResponse(RIL_UNSOL_SIGNAL_STRENGTH, &signalStrength, sizeof(RIL_SignalStrength_v6));
     free(line);
     return;
 
@@ -5267,8 +5269,7 @@ static void requestSignalStrength(RIL_Token t)
 
     ALOGI("SignalStrength %d BER: %d", rssi, ber);
 
-    RIL_onRequestComplete(t, RIL_E_SUCCESS, &signalStrength,
-                          sizeof(RIL_SignalStrength_v6));
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &signalStrength, sizeof(RIL_SignalStrength_v6));
 
     at_response_free(atResponse);
     atResponse = NULL;
