@@ -16,7 +16,6 @@
  ** limitations under the License.
  */
 
-//#define ORG_DIAL 0
 //#define BYPASS_AUDIO_CHECK 1
 
 
@@ -1049,7 +1048,6 @@ static int wait_for_property(const char *name, const char *desired_value, int ma
     return -1; /* failure */
 }
 
-#ifdef ORG_DIAL
 /* Write an string to the modem */
 static int dial_at_modem(const char* cmd, int skipanswerwait)
 {
@@ -1134,7 +1132,7 @@ static int dial_at_modem(const char* cmd, int skipanswerwait)
 		n = 0;
 		do {
 			ret = read(fd, &buf[n], 1);
-			if (ret < 0 && errno == EINTR)
+			if (ret < 0 && (errno == EINTR || errno == EAGAIN))
 				continue;
 		
 			if (ret < 0) {
@@ -1179,9 +1177,11 @@ static int dial_at_modem(const char* cmd, int skipanswerwait)
 	close(fd);
 	
 	ALOGD("dial_at_modem: got answer : '%s'",&buf[n]);
-	return (!strcmp(&buf[n],"OK") || !strcmp(&buf[n],"CONNECT")) ? 0 : -1;
+	if (strstr(&buf[n],"OK")) return 0;
+	if (strstr(&buf[n],"CONNECT")) return 0;
+
+	return -1;
 } 
-#endif
 
 static int killConn(const char* cididx)
 {
@@ -1198,11 +1198,9 @@ static int killConn(const char* cididx)
 	/* Kill pppd daemon (just in case)*/
 	system("killall pppd");
 	
-#ifdef ORG_DIAL
 	/* Hang up modem, if needed */
-	dial_at_modem("+++",1);
+	//dial_at_modem("+++",1);
 	dial_at_modem("ATH\r\n",1);
-#endif
 	
 	/* Bring down all interfaces */
 	if (ifc_init() == 0) {
@@ -1393,37 +1391,26 @@ static int setupPPP(RIL_Token t,const char* ctxid,const char* user,const char* p
 
 	ALOGD("Trying to setup PPP connnection...");
 	
-#ifdef ORG_DIAL
 	/* PDP context activation */
-	err = at_send_command("AT+CGACT=%s",ctxid);
+	//err = at_send_command("AT+CGACT=%s",ctxid);
 	
-    /* Enter data state using context #1 as PPP */
+	/* Try just with data context activation */
 	asprintf(&cmd,"AT+CGDATA=\"PPP\",%s\r\n",ctxid);
-    err = dial_at_modem(cmd,0);
+	err = dial_at_modem(cmd,0);
 	free(cmd);
-
-	/* If failure, fall back to Start data on PDP context 1 */	
 	if (err) {
-		ALOGD("Failed to activate data context - Resorting to dial");
-		err = at_send_command("ATD*99***%s#",ctxid);
-		if (err != AT_NOERROR) {
-			return -1;
-		}
-	}
-#else
-	/* Dial data */
-	err = at_send_command("ATD*99***%s#",ctxid);
-	if (err != AT_NOERROR) {
-		/* If failed, retry just with data context activation */
-		err = at_send_command("AT+CGDATA=\"PPP\",%s",ctxid);
-		if (err != AT_NOERROR) {
+		/* If failed, retry with dial command */
+		asprintf(&cmd,"ATD*99***%s#\r\n",ctxid);
+		err = dial_at_modem(cmd,0);
+		free(cmd);
+		if (err) {
+			ALOGE("Failed to dial");
 			return -1;
 		}
 	}
 	
 	/* Wait for the modem to finish */
 	sleep(2);
-#endif
 	
 	/* original options
 	"nodetach debug noauth defaultroute usepeerdns "
